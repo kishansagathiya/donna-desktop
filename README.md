@@ -21,21 +21,22 @@ donna/
 ```
 
 ```bash
-# 1. Apply supabase/migrations/0031_desktop_local_agents.sql
-# 2. Enable the dogfood flag for your user:
-#    update user_preferences set flag_local_agents_v1 = true where user_id = '…';
+# From the donna monorepo (uses the Railway API, launches Tauri)
+npm run dev:desktop
 
-cd donna-server-go && go run ./cmd/server          # API on :8787
-cd donna-desktop && npm install && npm run tauri dev
+# Local Go API instead:
+DONNA_USE_LOCAL_API=1 npm run dev:desktop
 ```
+
+Ctrl+C stops the desktop app. After sign-in, turn on **Profile → Experimental → Local agents (macOS)**. Production Supabase must have `supabase/migrations/0031_desktop_local_agents.sql` applied.
 
 The desktop window loads `donna-web`. Sign in; the worker registers this Mac and claims local runs.
 
 Add these redirect URLs in Supabase → Authentication → URL Configuration:
 
 - `https://donnadoesit.com/login?desktop_handoff=1`
-- `http://localhost:1420/login?desktop_handoff=1`
-- `http://localhost:5173/login?desktop_handoff=1`
+- `http://localhost:5173/login`
+- `http://localhost:5173/login?desktop=1`
 
 Playwright Chromium is required for local browser tools:
 

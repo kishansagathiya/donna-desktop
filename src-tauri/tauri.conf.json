@@ -5,7 +5,7 @@
   "identifier": "com.kishansagathiya.donna.desktop",
   "build": {
     "beforeDevCommand": "npm run dev --prefix ../donna-web",
-    "devUrl": "http://localhost:1420",
+    "devUrl": "http://localhost:5173",
     "beforeBuildCommand": "npm run build --prefix ../donna-web",
     "frontendDist": "../donna-web/dist"
   },

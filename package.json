@@ -6,6 +6,7 @@
   "scripts": {
     "tauri": "tauri",
     "dev": "tauri dev",
+    "dev:local": "bash scripts/dev-local.sh",
     "build": "tauri build",
     "sidecar:build": "bash scripts/build-sidecar.sh"
   },

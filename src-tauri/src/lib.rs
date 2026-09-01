@@ -154,14 +154,10 @@ fn set_session(
 }
 
 #[tauri::command]
-fn auth_start(app: AppHandle, state: State<AppState>, provider: String) -> Result<(), String> {
-    let redirect = "donna://auth/callback";
-    let url = format!(
-        "{}/login?desktop=1&provider={}&redirect_to={}",
-        state.web_base,
-        urlencoding_lite(&provider),
-        urlencoding_lite(redirect)
-    );
+fn auth_start(app: AppHandle, state: State<AppState>, _provider: String) -> Result<(), String> {
+    // Use the same origin as the Tauri webview in local dev so unpublished
+    // handoff code on /login?desktop=1 actually runs.
+    let url = format!("{}/login?desktop=1", state.web_base.trim_end_matches('/'));
     app.opener()
         .open_url(url, None::<&str>)
         .map_err(|e| e.to_string())?;
@@ -266,10 +262,6 @@ fn folder_path(folder: tauri_plugin_dialog::FilePath) -> Result<String, String> 
         .into_path()
         .map(|p| p.to_string_lossy().into_owned())
         .map_err(|e| e.to_string())
-}
-
-fn urlencoding_lite(raw: &str) -> String {
-    url::form_urlencoded::byte_serialize(raw.as_bytes()).collect()
 }
 
 fn support_dir() -> PathBuf {
