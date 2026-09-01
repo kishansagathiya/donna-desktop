@@ -1,0 +1,17 @@
+{
+  "name": "donna-browser",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Playwright sidecar for Donna browse_page and interactive agent browser sessions",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "install-browsers": "npx playwright install chromium"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "playwright": "^1.53.0"
+  }
+}

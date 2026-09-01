@@ -1,0 +1,15 @@
+{
+  "name": "donna-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Donna Desktop — local agent runtime for macOS",
+  "scripts": {
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "sidecar:build": "bash scripts/build-sidecar.sh"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.5.0"
+  }
+}
