@@ -1,5 +1,6 @@
 use std::fs;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -155,9 +156,16 @@ fn set_session(
 
 #[tauri::command]
 fn auth_start(app: AppHandle, state: State<AppState>, _provider: String) -> Result<(), String> {
-    // Use the same origin as the Tauri webview in local dev so unpublished
-    // handoff code on /login?desktop=1 actually runs.
-    let url = format!("{}/login?desktop=1", state.web_base.trim_end_matches('/'));
+    // Apple/Google return URLs are registered on the public site. macOS does not
+    // bind donna:// during `tauri dev`, so we also listen on loopback for a POST.
+    let nonce = Uuid::new_v4().to_string();
+    let port = spawn_auth_loopback(app.clone(), nonce.clone())?;
+    let url = format!(
+        "{}/login?desktop=1&handoff_port={}&handoff_nonce={}",
+        state.web_base.trim_end_matches('/'),
+        port,
+        nonce
+    );
     app.opener()
         .open_url(url, None::<&str>)
         .map_err(|e| e.to_string())?;
@@ -485,6 +493,160 @@ fn refresh_access(state: &AppState) -> Result<(), String> {
     Ok(())
 }
 
+fn apply_browser_session(app: &AppHandle, access: String, refresh: String) {
+    if access.is_empty() {
+        return;
+    }
+    if let Some(state) = app.try_state::<AppState>() {
+        if !refresh.is_empty() {
+            let _ = state.save_refresh(&refresh);
+        }
+        *state.tokens.lock().unwrap() = Some(Tokens {
+            access_token: access,
+        });
+        *state.access_issued_at.lock().unwrap() = Some(Instant::now());
+        let _ = spawn_worker(&state);
+        schedule_workspace_sync(&state);
+        let _ = app.emit("donna://auth", serde_json::json!({"ok": true}));
+        if let Some(win) = app.get_webview_window("main") {
+            let _ = win.show();
+            let _ = win.set_focus();
+        }
+        let _ = app
+            .notification()
+            .builder()
+            .title("Donna")
+            .body("Signed in. Local agent worker is starting.")
+            .show();
+    }
+}
+
+fn spawn_auth_loopback(app: AppHandle, nonce: String) -> Result<u16, String> {
+    let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
+    listener.set_nonblocking(true).map_err(|e| e.to_string())?;
+    let port = listener.local_addr().map_err(|e| e.to_string())?.port();
+    thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(15 * 60);
+        while Instant::now() < deadline {
+            match listener.accept() {
+                Ok((stream, addr)) => {
+                    if !addr.ip().is_loopback() {
+                        continue;
+                    }
+                    if handle_auth_http(stream, &app, &nonce) {
+                        break;
+                    }
+                }
+                Err(err)
+                    if err.kind() == std::io::ErrorKind::WouldBlock
+                        || err.kind() == std::io::ErrorKind::TimedOut =>
+                {
+                    thread::sleep(Duration::from_millis(200));
+                }
+                Err(_) => break,
+            }
+        }
+    });
+    Ok(port)
+}
+
+fn handle_auth_http(stream: TcpStream, app: &AppHandle, nonce: &str) -> bool {
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(15)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(15)));
+    let _ = stream.set_nonblocking(false);
+    let mut reader = BufReader::new(stream);
+    let mut request_line = String::new();
+    if reader.read_line(&mut request_line).is_err() {
+        return false;
+    }
+    let mut content_length = 0usize;
+    loop {
+        let mut line = String::new();
+        if reader.read_line(&mut line).is_err() {
+            return false;
+        }
+        if line == "\r\n" || line == "\n" || line.is_empty() {
+            break;
+        }
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        if name.eq_ignore_ascii_case("content-length") {
+            content_length = value.trim().parse().unwrap_or(0);
+        }
+    }
+    if content_length > 1_000_000 {
+        return false;
+    }
+    let mut body = vec![0u8; content_length];
+    if content_length > 0 && reader.read_exact(&mut body).is_err() {
+        return false;
+    }
+    let parts: Vec<&str> = request_line.split_whitespace().collect();
+    let method = parts.first().copied().unwrap_or("");
+    let target = parts.get(1).copied().unwrap_or("/");
+    let (path, query) = target.split_once('?').unwrap_or((target, ""));
+
+    if method == "OPTIONS" {
+        write_auth_http_response(reader.get_mut(), 204, "text/plain", b"");
+        return false;
+    }
+    if path != "/desktop-auth" {
+        write_auth_http_response(reader.get_mut(), 404, "text/plain", b"not found");
+        return false;
+    }
+
+    let mut access = String::new();
+    let mut refresh = String::new();
+    let mut got_nonce = String::new();
+    let mut ingest = |k: &str, v: String| match k {
+        "access_token" => access = v,
+        "refresh_token" => refresh = v,
+        "nonce" => got_nonce = v,
+        _ => {}
+    };
+    for (k, v) in url::form_urlencoded::parse(query.as_bytes()) {
+        ingest(k.as_ref(), v.into_owned());
+    }
+    if method == "POST" {
+        for (k, v) in url::form_urlencoded::parse(&body) {
+            ingest(k.as_ref(), v.into_owned());
+        }
+    }
+    if got_nonce != nonce || access.is_empty() {
+        write_auth_http_response(reader.get_mut(), 403, "text/plain", b"forbidden");
+        return false;
+    }
+    apply_browser_session(app, access, refresh);
+    const HTML: &[u8] = b"<!doctype html><meta charset=utf-8><title>Donna</title><p>Signed in. You can close this tab and return to Donna Desktop.</p>";
+    write_auth_http_response(reader.get_mut(), 200, "text/html; charset=utf-8", HTML);
+    true
+}
+
+fn write_auth_http_response(stream: &mut TcpStream, status: u16, content_type: &str, body: &[u8]) {
+    let reason = match status {
+        200 => "OK",
+        204 => "No Content",
+        403 => "Forbidden",
+        _ => "Not Found",
+    };
+    let header = format!(
+        "HTTP/1.1 {status} {reason}\r\n\
+Content-Type: {content_type}\r\n\
+Content-Length: {}\r\n\
+Access-Control-Allow-Origin: *\r\n\
+Access-Control-Allow-Methods: POST, GET, OPTIONS\r\n\
+Access-Control-Allow-Headers: Content-Type\r\n\
+Connection: close\r\n\r\n",
+        body.len()
+    );
+    let _ = stream.write_all(header.as_bytes());
+    if !body.is_empty() {
+        let _ = stream.write_all(body);
+    }
+    let _ = stream.flush();
+}
+
 fn handle_deep_link(app: &AppHandle, url: &str) {
     let Ok(parsed) = url::Url::parse(url) else {
         return;
@@ -516,31 +678,7 @@ fn handle_deep_link(app: &AppHandle, url: &str) {
             }
         }
     }
-    if access.is_empty() {
-        return;
-    }
-    if let Some(state) = app.try_state::<AppState>() {
-        if !refresh.is_empty() {
-            let _ = state.save_refresh(&refresh);
-        }
-        *state.tokens.lock().unwrap() = Some(Tokens {
-            access_token: access,
-        });
-        *state.access_issued_at.lock().unwrap() = Some(Instant::now());
-        let _ = spawn_worker(&state);
-        schedule_workspace_sync(&state);
-        let _ = app.emit("donna://auth", serde_json::json!({"ok": true}));
-        if let Some(win) = app.get_webview_window("main") {
-            let _ = win.show();
-            let _ = win.set_focus();
-        }
-        let _ = app
-            .notification()
-            .builder()
-            .title("Donna")
-            .body("Signed in. Local agent worker is starting.")
-            .show();
-    }
+    apply_browser_session(app, access, refresh);
 }
 
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {

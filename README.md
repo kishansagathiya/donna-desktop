@@ -30,13 +30,9 @@ DONNA_USE_LOCAL_API=1 npm run dev:desktop
 
 Ctrl+C stops the desktop app. After sign-in, turn on **Profile → Experimental → Local agents (macOS)**. Production Supabase must have `supabase/migrations/0031_desktop_local_agents.sql` applied.
 
-The desktop window loads `donna-web`. Sign in; the worker registers this Mac and claims local runs.
+Apple and Google sign-in open [donnadoesit.com/login?desktop=1](https://donnadoesit.com/login?desktop=1) in the system browser. After sign-in, click **Open Donna Desktop** — the page posts tokens to a one-shot `127.0.0.1` listener in the Mac app (`donna://` only works for an installed `.app`, not `tauri dev`). Email/password stays in the app window.
 
-Add these redirect URLs in Supabase → Authentication → URL Configuration:
-
-- `https://donnadoesit.com/login?desktop_handoff=1`
-- `http://localhost:5173/login`
-- `http://localhost:5173/login?desktop=1`
+The desktop window still loads local `donna-web` during `tauri dev` so unpublished UI can be tested; the Go sidecar talks to Railway.
 
 Playwright Chromium is required for local browser tools:
 

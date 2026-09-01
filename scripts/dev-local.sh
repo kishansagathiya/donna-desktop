@@ -20,7 +20,7 @@ ENV_FILE="$ROOT/.env"
 RAILWAY_API="https://donna-server-go-production.up.railway.app"
 USE_LOCAL="${DONNA_USE_LOCAL_API:-0}"
 API_PORT="${DONNA_PORT:-8787}"
-WEB_BASE="http://localhost:5173"
+WEB_BASE="https://donnadoesit.com"
 ARCH="$(uname -m)"
 TRIPLE="aarch64-apple-darwin"
 if [[ "$ARCH" == "x86_64" ]]; then
